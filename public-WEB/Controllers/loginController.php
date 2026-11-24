@@ -295,6 +295,7 @@ function crearSesion($usuario) {
         'roles' => $usuario->getRoles()
     ];
     $_SESSION['usuario_id'] = $usuario->getId();
+    $_SESSION['idTipoUsuario'] = $usuario->getIdTipoUsuario();
     
     // Guardar sesión en BD
     Auth::guardarSesion($usuario->getId(), session_id());

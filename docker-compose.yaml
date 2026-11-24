@@ -1,14 +1,16 @@
 services:
   webserver:
     build:
-      context: ../
+      context: .
       dockerfile: ./docker/php/Dockerfile
     container_name: apache_web
     ports:
-      - "80:80"
-      - "443:443"
+      - "8080:80"
+      - "444:443"
     volumes:
-      - public:/var/www/html
+      - ./public-WEB:/var/www/html
+      - ./docker/apache/sglab-seguridad.conf:/etc/apache2/conf-enabled/sglab-seguridad.conf:ro
+      - ./docker/php/zz-sglab.ini:/usr/local/etc/php/conf.d/zz-sglab.ini:ro
      # - ../certs/etc:/etc/letsencrypt
     environment:
       - DB_HOST=database
@@ -26,31 +28,32 @@ services:
     image: mysql:8.0
     container_name: db
     environment:
-      ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      DB_NAME: ${DB_NAME}
-      DB_USER: ${DB_USER}
-      DB_PASSWORD: ${DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME}
+      MYSQL_USER: ${DB_USER}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
     ports:
-      - "3306:3306"
+      - "127.0.0.1:3307:3306"
     volumes:
-      - .sql:/docker-entrypoint-initdb.d
+      - ./public-WEB/BaseDatos.sql:/docker-entrypoint-initdb.d/01-schema.sql
+      - ./docker/init-db.sh:/docker-entrypoint-initdb.d/02-init.sh
       - mysql-data:/var/lib/mysql  # Volumen persistente para datos
     healthcheck:
-      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD"]
       interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 30s
+      retries: 10
+      start_period: 120s
     restart: unless-stopped
     networks:
       - app-network
-  
+  certbot:
     image: certbot/certbot
     container_name: certbot_renew
     volumes:
-      - ../certs/etc:/etc/letsencrypt
-      - ../certs/lib:/var/lib/letsencrypt
-      - ../www:/var/www/html
+      - ./certs/etc:/etc/letsencrypt
+      - ./certs/lib:/var/lib/letsencrypt
+      - ./public-WEB:/var/www/html
     entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew --webroot --webroot-path=/var/www/html; sleep 12h & wait $${!}; done;'"
     depends_on:
       - webserver

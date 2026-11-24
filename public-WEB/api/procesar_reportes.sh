@@ -2,15 +2,15 @@
 
 # --- CONFIGURACIÓN ---
 # URL de tu API. Si el script corre en el mismo servidor, usa localhost.
-API_URL="http://localhost/tu_proyecto/api/api_registro.php" 
-API_KEY="TU_CLAVE_SECRETA_AQUI_12345" # La misma clave que en el PHP
+API_URL="http://localhost:8080/api/api_registro.php"
+API_KEY="df25493a1b7f80610652420f0b5ae62ab165b8ef6c46e5af" # La misma clave que en el PHP
 
 # Carpeta donde SCP deja los archivos de Windows
-INCOMING_DIR="/home/tu_usuario/reportes_entrantes/"
+INCOMING_DIR="$HOME/SGLAB/LAB6/"
 # Carpeta donde la API buscará los archivos (debe coincidir con REPORTS_DIR en el PHP)
-PROCESSING_DIR="/var/www/html/tu_proyecto/reportes_para_procesar/"
+PROCESSING_DIR="$(cd "$(dirname "$0")/.." && pwd)/reportes_para_procesar/"
 # Carpeta para mover los archivos que fallen
-ERROR_DIR="/home/tu_usuario/reportes_con_error/"
+ERROR_DIR="$HOME/reportes_con_error/"
 # --- FIN CONFIGURACIÓN ---
 
 # Asegurarse de que los directorios existan
@@ -32,6 +32,7 @@ do
     
     # 1. Mover el archivo a la carpeta que la API puede leer
     mv "$filepath" "$PROCESSING_DIR$filename"
+    chgrp www-data "$PROCESSING_DIR$filename" && chmod 660 "$PROCESSING_DIR$filename"
     
     # 2. Preparar el payload JSON
     JSON_PAYLOAD=$(printf '{"filename": "%s"}' "$filename")

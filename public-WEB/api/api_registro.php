@@ -1,106 +1,147 @@
 <?php
 header('Content-Type: application/json');
-require_once '../models/Database.php';
-require_once '../models/Registro.php';
-require_once '../models/Equipo.php';
+date_default_timezone_set('America/Montevideo'); // la fecha del .toml es hora local del PC
+require_once '../Models/Database.php';
+require_once '../Models/Registro.php';
 
 // --- CONFIGURACIÓN ---
-define('API_SECRET_KEY', 'TU_CLAVE_SECRETA_AQUI_12345');
-// Ruta a la carpeta donde el script de Linux moverá los reportes para ser procesados.
-// ¡ASEGÚRATE DE QUE ESTA CARPETA TENGA PERMISOS DE LECTURA/ESCRITURA PARA EL SERVIDOR WEB (www-data)!
+define('API_SECRET_KEY', 'df25493a1b7f80610652420f0b5ae62ab165b8ef6c46e5af'); // debe ser igual a API_KEY en procesar_reportes.sh
+define('LAB_NOMBRE_DEFECTO', 'Laboratorio 6'); // laboratorio donde se dan de alta los equipos nuevos
 define('REPORTS_DIR', __DIR__ . '/../reportes_para_procesar/');
 
 function enviarRespuesta($statusCode, $mensaje, $datos = null) {
     http_response_code($statusCode);
     $respuesta = ['mensaje' => $mensaje];
-    if ($datos) {
-        $respuesta['datos'] = $datos;
-    }
+    if ($datos) { $respuesta['datos'] = $datos; }
     echo json_encode($respuesta);
     exit;
 }
 
-// --- Función para parsear el reporte ---
-function parseReportValue($pattern, $content) {
-    if (preg_match($pattern, $content, $matches)) {
-        return trim($matches[1]);
+// Parser mínimo de TOML (secciones [x] y pares clave = "texto" | número)
+function parseToml($texto) {
+    $datos = [];
+    $seccion = '';
+    foreach (preg_split('/\r?\n/', $texto) as $linea) {
+        $linea = trim($linea);
+        if ($linea === '' || $linea[0] === '#') continue;
+        if (preg_match('/^\[([^\]]+)\]$/', $linea, $m)) { $seccion = $m[1]; continue; }
+        if (preg_match('/^([A-Za-z0-9_]+)\s*=\s*(.*)$/', $linea, $m)) {
+            $valor = trim($m[2]);
+            if (strlen($valor) >= 2 && $valor[0] === '"' && substr($valor, -1) === '"') {
+                $valor = substr($valor, 1, -1);
+                $valor = strtr($valor, ['\\\\' => '\\', '\\"' => '"', '\\n' => "\n"]);
+            }
+            $datos[$seccion][$m[1]] = $valor;
+        }
     }
-    return null;
+    return $datos;
 }
 
-// 1. Verificaciones de Seguridad y Método (sin cambios)
+// 1. Seguridad y método
 $apiKey = $_SERVER['HTTP_X_API_KEY'] ?? '';
 if ($apiKey !== API_SECRET_KEY) { enviarRespuesta(401, 'Acceso no autorizado.'); }
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') { enviarRespuesta(405, 'Método no permitido.'); }
 
-// 2. Obtener el nombre del archivo del JSON
+// 2. Nombre de archivo
 $data = json_decode(file_get_contents("php://input"), true);
 if (empty($data['filename'])) {
     enviarRespuesta(400, 'Petición incorrecta. Falta el campo "filename".');
 }
 $filename = basename($data['filename']);
 $reportPath = REPORTS_DIR . $filename;
-
-// 3. Validar y Leer el Archivo de Reporte
 if (!file_exists($reportPath)) {
     enviarRespuesta(404, 'El archivo de reporte no se encuentra.', ['archivo' => $filename]);
 }
-$reportContent = file_get_contents($reportPath);
 
-// 4. Parsear el Nombre del Archivo para los datos principales
-$parts = explode('-', pathinfo($filename, PATHINFO_FILENAME), 3);
-if (count($parts) !== 3) {
-    enviarRespuesta(400, 'Formato de nombre de archivo inválido.', ['recibido' => $filename]);
+// 3. Leer y parsear el TOML
+$toml = parseToml(file_get_contents($reportPath));
+$serial   = trim($toml['info_general']['serial'] ?? '');
+$hostname = trim($toml['info_general']['nombre_pc'] ?? '');
+if ($serial === '' && $hostname === '') {
+    enviarRespuesta(400, 'El reporte no trae serial ni nombre_pc.', ['recibido' => $filename]);
 }
-list($fecha_str, $serialNumber, $estado_str) = $parts;
 
-// 5. Extraer datos del CONTENIDO del reporte
-$ip = parseReportValue('/Direccion IP: (.*)/', $reportContent);
-$diskFreeStr = parseReportValue('/Disco Libre \(C:\): (.*?) GB/', $reportContent);
-$diskFree = $diskFreeStr ? (int)floatval($diskFreeStr) : null;
-
-// Crear una descripción detallada con el resto de la información
-$descripcion = "Reporte automático. " .
-    "PC: " . parseReportValue('/Nombre del PC: (.*)/', $reportContent) . " | " .
-    "Usuario: " . parseReportValue('/Usuario: (.*)/', $reportContent) . " | " .
-    "OS: " . parseReportValue('/SO: (.*)/', $reportContent) . " | " .
-    "CPU: " . parseReportValue('/Procesador: (.*)/', $reportContent) . " | " .
-    "RAM Libre: " . parseReportValue('/RAM Libre: (.*)/', $reportContent) . " | " .
-    "Uso RAM: " . parseReportValue('/Uso de RAM: (.*)/', $reportContent) . " | " .
-    "Uso Disco: " . parseReportValue('/Uso de Disco: (.*)/', $reportContent);
-
-// 6. Buscar el Equipo por Número de Serie
-$equipo = Equipo::obtenerPorSerial($serialNumber);
-if (!$equipo) {
-    // Si no se encuentra, borra el reporte para evitar bucles de error.
-    unlink($reportPath); 
-    enviarRespuesta(404, 'Equipo no encontrado en la BD. Reporte descartado.', ['SerialNumber' => $serialNumber]);
-}
-$idEquipo = $equipo['idEquipo'];
-
-// 7. Preparar y Guardar el Registro
+// 4. Buscar el equipo: por serial (solo si es numérico, la columna es INT) o por hostname
 try {
-    $fecha_epoch = strtotime($fecha_str);
-    $estado_num = (strtolower($estado_str) === 'true') ? 1 : 0;
+    $db = Database::getConnection('admin');
+} catch (Throwable $e) {
+    error_log("api_registro.php: sin conexion BD admin: " . $e->getMessage());
+    enviarRespuesta(500, 'No se pudo conectar a la base de datos (usuario admin).');
+}
+$equipo = null;
+if ($serial !== '' && ctype_digit($serial)) {
+    $st = $db->prepare("SELECT idEquipo FROM Equipos WHERE serialNumber = :s LIMIT 1");
+    $st->execute([':s' => (int)$serial]);
+    $equipo = $st->fetch(PDO::FETCH_ASSOC);
+}
+if (!$equipo && $hostname !== '') {
+    $st = $db->prepare("SELECT idEquipo FROM Equipos WHERE hostname = :h LIMIT 1");
+    $st->execute([':h' => $hostname]);
+    $equipo = $st->fetch(PDO::FETCH_ASSOC);
+}
+if (!$equipo) {
+    // Alta automatica: el equipo no existe, se crea con los datos del .toml
+    // y se lo asigna al laboratorio LAB_NOMBRE_DEFECTO (se crea si no existe).
+    try {
+        $st = $db->prepare("SELECT idLaboratorio FROM Laboratorios WHERE nombre = :n LIMIT 1");
+        $st->execute([':n' => LAB_NOMBRE_DEFECTO]);
+        $idLab = $st->fetchColumn();
+        if (!$idLab) {
+            $st = $db->prepare("INSERT INTO Laboratorios (nombre, comentario) VALUES (:n, 'Creado automaticamente por api_registro')");
+            $st->execute([':n' => LAB_NOMBRE_DEFECTO]);
+            $idLab = $db->lastInsertId();
+        }
+        $serialInt = ($serial !== '' && ctype_digit($serial) && strlen($serial) <= 8) ? (int)$serial : null;
+        $st = $db->prepare("INSERT INTO Equipos (serialNumber, hostname, CPU, RAM, diskType, diskTotal, idLaboratorio)
+                            VALUES (:s, :h, :c, :r, 'N/D', :d, :l)");
+        $st->execute([
+            ':s' => $serialInt,
+            ':h' => $hostname !== '' ? $hostname : $serial,
+            ':c' => substr($toml['hardware']['cpu'] ?? 'N/D', 0, 100),
+            ':r' => (int)round((float)($toml['hardware']['ram_gb'] ?? 0)),
+            ':d' => (int)round((float)($toml['hardware']['disco_c_gb'] ?? 0)),
+            ':l' => $idLab,
+        ]);
+        $equipo = ['idEquipo' => $db->lastInsertId()];
+    } catch (Throwable $e) {
+        error_log("api_registro.php: no se pudo dar de alta el equipo: " . $e->getMessage());
+        enviarRespuesta(500, 'No se pudo dar de alta el equipo: ' . $e->getMessage());
+    }
+}
 
+// 5. Armar el registro
+$ip = $toml['red']['ip'] ?? null;
+$discoTotal = (float)($toml['hardware']['disco_c_gb'] ?? 0);
+$discoUso   = (float)($toml['recursos_disponibles']['disco_c_uso_porcentaje'] ?? 0);
+$diskFree   = (int)round($discoTotal * (1 - $discoUso / 100));
+
+$fechaTxt = preg_replace('/[()]/', '', $toml['info_general']['fecha'] ?? ''); // "2025/08/07 (09:31)"
+$fecha = strtotime($fechaTxt) ?: time();
+$estado = (($toml['info_general']['estado_conexion'] ?? '') === 'Exito') ? 1 : 0;
+
+$descripcion = "Reporte automático. " .
+    "PC: " . $hostname . " | " .
+    "Usuario: " . ($toml['ssh']['usuario'] ?? '') . " | " .
+    "OS: " . ($toml['sistema_operativo']['nombre'] ?? '') . " | " .
+    "CPU: " . ($toml['hardware']['cpu'] ?? '') . " | " .
+    "Uso RAM: " . ($toml['recursos_disponibles']['ram_uso_porcentaje'] ?? '') . "% | " .
+    "Uso Disco: " . $discoUso . "%";
+
+try {
     $registro = new Registro([
-        'idEquipo'    => $idEquipo,
-        'idUsuario'   => 1, // Usuario del sistema/automático
-        'fecha'       => $fecha_epoch,
-        'estado'      => $estado_num,
+        'idEquipo'    => $equipo['idEquipo'],
+        'idUsuario'   => 1, // usuario del sistema
+        'fecha'       => $fecha,
+        'estado'      => $estado,
         'IP'          => $ip,
         'diskFree'    => $diskFree,
-        'descripcion' => substr($descripcion, 0, 255) // Limitar a 255 caracteres
+        'descripcion' => substr($descripcion, 0, 255)
     ]);
-
     if ($registro->guardar()) {
-        // Éxito: Eliminar el reporte para no volver a procesarlo.
-        unlink($reportPath); 
+        unlink($reportPath);
         enviarRespuesta(201, 'Registro creado exitosamente y reporte procesado.');
-    } else {
-        enviarRespuesta(500, 'Error al guardar el registro en la base de datos.');
     }
-
+    enviarRespuesta(500, 'Error al guardar el registro en la base de datos.');
 } catch (Exception $e) {
     error_log("Error en api_registro.php: " . $e->getMessage());
     enviarRespuesta(500, 'Ocurrió un error interno en el servidor.');

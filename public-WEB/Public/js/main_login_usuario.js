@@ -4,7 +4,7 @@ $(document).ready(function() {
     let tempUserId = null;
     let tempUsername = null;
     $('#githubLoginBtn').on('click', function() {
-        window.location.href = '../controllers/githubAuthController.php';
+        window.location.href = '../Controllers/githubAuthController.php';
     });
     
     // Año actual en el footer

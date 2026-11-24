@@ -113,8 +113,8 @@ RUN echo "ServerName SGLAB" >> /etc/apache2/apache2.conf
 # PASO 6: Configurar PHP
 # ──────────────────────────────────────────
 # Copia archivo de configuración personalizado
-COPY ./config/php.ini /usr/local/etc/php/conf.d/custom.ini
-
+COPY ./docker/php/config/php.ini /usr/local/etc/php/conf.d/custom.ini
+RUN mkdir -p /var/lib/php/sessions && chown www-data:www-data /var/lib/php/sessions
 # Configurar OPcache (cache de código PHP para mejor performance)
 RUN echo "opcache.enable=1" >> /usr/local/etc/php/conf.d/opcache.ini \
     && echo "opcache.memory_consumption=128" >> /usr/local/etc/php/conf.d/opcache.ini
@@ -131,7 +131,7 @@ WORKDIR /var/www/html
 # ============================================
 # Copia archivos desde tu PC al contenedor
 # (En este caso, solo copiamos el entrypoint)
-COPY docker-entrypoint.sh /usr/local/bin/
+COPY ./docker/php/docker-entrypoint.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # ============================================

@@ -34,6 +34,9 @@ mysql -uroot -p"${MYSQL_ROOT_PASSWORD}" <<-EOSQL
     CREATE USER IF NOT EXISTS 'sgapp_backup'@'%' IDENTIFIED BY 'BackupITIUTU!';
     GRANT SELECT ON bddsglab6.* TO 'sgapp_backup'@'%';
 
+    CREATE USER IF NOT EXISTS 'sgapp_admin'@'%' IDENTIFIED BY 'AdministradorITI!';
+    GRANT SELECT, INSERT, UPDATE, DELETE ON bddsglab6.* TO 'sgapp_admin'@'%';
+
     FLUSH PRIVILEGES;
 EOSQL
 

@@ -42,7 +42,7 @@ if (!isset($githubUsername)) {
                     ingresa tu cédula de identidad registrada por tu docente.
                 </div>
                 
-                <form method="GET" action="../controllers/githubAuthController.php" id="vinculacionForm">
+                <form method="GET" action="../Controllers/githubAuthController.php" id="vinculacionForm">
                     <div class="mb-4">
                         <label for="ci" class="form-label fw-bold">Cédula de Identidad</label>
                         <input type="number" class="form-control form-control-lg" id="ci" name="ci_vinculacion" 
